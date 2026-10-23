@@ -1,6 +1,6 @@
 import { HttpError } from '../utils/HttpError.js';
 
-export function errorHandler(error, _req, res, next) {
+export function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
 
   let status = 500;
@@ -19,5 +19,12 @@ export function errorHandler(error, _req, res, next) {
     message = 'Request body too large';
   }
 
+  if (status >= 500) {
+    // Route patterns and error categories diagnose failures without logging request data or error messages.
+    console.error('Request failed', {
+      method: req.method, route: req.route?.path, status,
+      type: error?.constructor?.name, code: Number.isInteger(error?.code) ? error.code : undefined,
+    });
+  }
   res.status(status).json({ error: { message } });
 }

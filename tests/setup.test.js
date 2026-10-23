@@ -9,6 +9,7 @@ import { loadEnv } from '../src/config/env.js';
 import { connectDatabase } from '../src/config/database.js';
 import { HttpError } from '../src/utils/HttpError.js';
 import { errorHandler } from '../src/middleware/errorHandler.js';
+import { authLimiter } from '../src/routes/auth.routes.js';
 
 const validEnv = {
   MONGODB_URI: 'mongodb://127.0.0.1:27029/secure_notes_test?replicaSet=notes-dev9',
@@ -32,6 +33,8 @@ test('environment defaults are usable and unknown process variables are excluded
   assert.equal(env.BCRYPT_COST, 12);
   assert.equal(env.JWT_EXPIRES_IN, '1h');
   assert.equal(env.NODE_ENV, 'development');
+  assert.equal(env.TRUST_PROXY_HOPS, 0);
+  assert.equal(loadEnv({ ...validEnv, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS, 1);
   assert.equal(env.UNRELATED_SECRET, undefined);
 });
 
@@ -49,6 +52,7 @@ test('invalid configuration names its fields without leaking supplied values', (
     ['FRONTEND_ORIGIN', 'https://example.com/path'],
     ['FRONTEND_ORIGIN', 'file:///tmp/site'],
     ['JWT_EXPIRES_IN', '0h'], ['NODE_ENV', 'unknown'],
+    ['TRUST_PROXY_HOPS', '-1'], ['TRUST_PROXY_HOPS', '1.5'], ['TRUST_PROXY_HOPS', 'true'],
   ]) {
     assert.throws(() => loadEnv({ ...validEnv, [field]: value }), /Invalid environment/);
   }
@@ -105,6 +109,55 @@ test('already-started responses delegate errors instead of writing a second resp
   assert.equal(forwarded, error);
 });
 
+test('server diagnostics contain categories without raw errors, URLs or credentials', (t) => {
+  const logs = t.mock.method(console, 'error', () => {});
+  const failure = new Error('private-password-and-database-URI');
+  failure.code = 91;
+  const req = { method: 'GET', route: { path: '/:id' }, originalUrl: '/private-id?token=private-token', headers: { authorization: 'private-token' } };
+  const res = { status(code) { this.code = code; return this; }, json(body) { this.body = body; } };
+  errorHandler(failure, req, res, () => assert.fail('Unexpected delegation'));
+  assert.equal(res.code, 500);
+  assert.deepEqual(res.body, { error: { message: 'Internal server error' } });
+  assert.deepEqual(logs.mock.calls[0].arguments, ['Request failed', { method: 'GET', route: '/:id', status: 500, type: 'Error', code: 91 }]);
+  assert.ok(!JSON.stringify(logs.mock.calls[0].arguments).includes('private-'));
+  errorHandler(new HttpError(403, 'Forbidden'), req, res, () => {});
+  assert.equal(logs.mock.callCount(), 1);
+});
+
+test('configured proxy hops separate clients and ignore forged leftmost addresses', async (t) => {
+  const previous = app.get('trust proxy');
+  const clientAddresses = Array.from({ length: 11 }, (_, i) => `192.0.2.${i + 1}`);
+  t.after(() => {
+    app.set('trust proxy', previous);
+    for (const key of ['127.0.0.1', ...clientAddresses]) authLimiter.resetKey(key);
+  });
+  const origin = await listen(t, app);
+  const attempt = (forwarded) => fetch(`${origin}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': forwarded }, body: '{}',
+  });
+  app.set('trust proxy', 1);
+  for (const address of clientAddresses) {
+    const response = await attempt(`198.51.100.99, ${address}`);
+    assert.equal(response.status, 400);
+    await response.text();
+  }
+  for (let i = 0; i < 9; i++) {
+    const response = await attempt(`198.51.100.${i}, ${clientAddresses[0]}`);
+    assert.equal(response.status, 400);
+    await response.text();
+  }
+  const blocked = await attempt(`198.51.100.200, ${clientAddresses[0]}`);
+  assert.equal(blocked.status, 429);
+  await blocked.text();
+  app.set('trust proxy', 0);
+  authLimiter.resetKey('127.0.0.1');
+  for (let i = 0; i < 11; i++) {
+    const response = await attempt(clientAddresses[i]);
+    assert.equal(response.status, i < 10 ? 400 : 429);
+    await response.text();
+  }
+});
+
 test('startup exits unsuccessfully for invalid configuration without secret output', () => {
   const child = spawnSync(process.execPath, ['src/server.js'], {
     cwd: new URL('../', import.meta.url),
@@ -151,19 +204,37 @@ test('server connects before listening, releases an occupied port and shuts down
   skip: !process.env.TEST_MONGODB_URI,
   timeout: 30000,
 }, async (t) => {
+  const productionUri = new URL(process.env.TEST_MONGODB_URI);
+  if (productionUri.hostname !== '127.0.0.1' || productionUri.pathname !== '/secure_notes_models_test') {
+    throw new Error('Startup tests require the dedicated local test URI');
+  }
+  const databaseName = `secure_notes_startup_test_${new mongoose.Types.ObjectId()}`;
+  productionUri.pathname = `/${databaseName}`;
+  const client = new mongoose.mongo.MongoClient(productionUri.href);
+  await client.connect();
+  t.after(async () => {
+    try {
+      assert.equal(productionUri.hostname, '127.0.0.1');
+      assert.equal(productionUri.pathname, `/${databaseName}`);
+      await client.db(databaseName).dropDatabase();
+    } finally { await client.close(); }
+  });
   const occupied = express().listen(0);
   await once(occupied, 'listening');
   t.after(() => new Promise((resolve) => occupied.close(resolve)));
   const port = String(occupied.address().port);
   const rejected = spawnSync(process.execPath, ['src/server.js'], {
     cwd: new URL('../', import.meta.url),
-    env: { ...process.env, ...validEnv, NODE_ENV: 'test', MONGODB_URI: process.env.TEST_MONGODB_URI, PORT: port },
+    env: { ...process.env, ...validEnv, NODE_ENV: 'production', MONGODB_URI: productionUri.href, PORT: port },
     encoding: 'utf8', timeout: 15000, windowsHide: true,
   });
   assert.equal(rejected.status, 1, JSON.stringify({
     stdout: rejected.stdout, stderr: rejected.stderr, error: rejected.error?.message,
   }));
   assert.match(rejected.stderr, /HTTP server failed/);
+  const actualIndexes = await Promise.all(['users', 'notes', 'posts'].map(async (name) =>
+    (await client.db(databaseName).collection(name).indexes()).map(({ name: indexName }) => indexName)));
+  assert.deepEqual(actualIndexes, [['_id_', 'email_1', 'interests_1'], ['_id_', 'ownerId_1__id_-1'], ['_id_', 'authorId_1__id_-1']]);
 
   const reservation = express().listen(0);
   await once(reservation, 'listening');
@@ -172,7 +243,7 @@ test('server connects before listening, releases an occupied port and shuts down
   const bootstrap = "process.once('message', () => { process.disconnect(); process.emit('SIGTERM'); }); await import('./src/server.js');";
   const child = spawn(process.execPath, ['--input-type=module', '-e', bootstrap], {
     cwd: new URL('../', import.meta.url),
-    env: { ...process.env, ...validEnv, NODE_ENV: 'test', MONGODB_URI: process.env.TEST_MONGODB_URI, PORT: String(availablePort) },
+    env: { ...process.env, ...validEnv, NODE_ENV: 'production', MONGODB_URI: productionUri.href, PORT: String(availablePort) },
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   t.after(() => { if (child.exitCode === null) child.kill(); });

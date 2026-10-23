@@ -10,6 +10,7 @@
     "start": "node --env-file-if-exists=.env src/server.js",
     "dev": "node --watch --env-file-if-exists=.env src/server.js",
     "test": "node --test",
+    "indexes": "node --env-file-if-exists=.env scripts/indexes.js",
     "seed": "node --env-file-if-exists=.env --env-file-if-exists=.env.seed scripts/seed.js",
     "explain": "node --env-file-if-exists=.env scripts/explain.js"
   },

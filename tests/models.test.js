@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import mongoose from 'mongoose';
 import { User } from '../src/models/user.model.js';
 import { Note } from '../src/models/note.model.js';
 import { Post } from '../src/models/post.model.js';
-import { syncDevelopmentIndexes } from '../src/config/indexes.js';
+import { createApplicationIndexes, syncDevelopmentIndexes } from '../src/config/indexes.js';
 
 const userInput = { name: ' Ada ', email: ' ADA@Example.com ', passwordHash: 'test-only-hash' };
 const ownerId = new mongoose.Types.ObjectId();
@@ -82,6 +83,61 @@ test('index synchronization is disabled outside development and rejects another 
   await syncDevelopmentIndexes('production');
   await syncDevelopmentIndexes('test');
   await assert.rejects(syncDevelopmentIndexes('development'), /dedicated secure_notes_dev/);
+});
+
+test('safe index provisioning uses only each model createIndexes and propagates failure', async (t) => {
+  const calls = [];
+  for (const model of [User, Note, Post]) {
+    t.mock.method(model, 'createIndexes', async () => { calls.push(model.modelName); });
+    t.mock.method(model, 'syncIndexes', () => assert.fail('Safe provisioning must never reconcile/drop indexes'));
+  }
+  await createApplicationIndexes();
+  assert.deepEqual(calls, ['User', 'Note', 'Post']);
+  t.mock.method(User, 'createIndexes', async () => { throw new Error('forced-index-failure'); });
+  await assert.rejects(createApplicationIndexes(), /forced-index-failure/);
+});
+
+test('index CLI handles a fresh production database, duplicate data and repeat runs', {
+  skip: !process.env.TEST_MONGODB_URI, timeout: 30000,
+}, async (t) => {
+  const uri = new URL(process.env.TEST_MONGODB_URI);
+  if (uri.hostname !== '127.0.0.1' || uri.pathname !== '/secure_notes_models_test') {
+    throw new Error('Index CLI tests require the dedicated local test URI');
+  }
+  const databaseName = `secure_notes_indexes_test_${new mongoose.Types.ObjectId()}`;
+  uri.pathname = `/${databaseName}`;
+  await mongoose.connect(uri.href, { serverSelectionTimeoutMS: 5000, bufferCommands: false });
+  t.after(async () => {
+    try {
+      assert.equal(mongoose.connection.host, '127.0.0.1');
+      assert.equal(mongoose.connection.name, databaseName);
+      await mongoose.connection.db.dropDatabase();
+    } finally { await mongoose.disconnect(); }
+  });
+  const first = await User.create({ ...userInput, email: 'index-fixture@example.invalid' });
+  const second = await User.create({ ...userInput, email: first.email });
+  const options = {
+    cwd: new URL('../', import.meta.url), encoding: 'utf8', timeout: 10000, windowsHide: true,
+    env: { ...process.env, NODE_ENV: 'production', MONGODB_URI: uri.href, JWT_SECRET: 'index-test-only-secret-at-least-32-characters', FRONTEND_ORIGIN: 'http://localhost:5500' },
+  };
+  const failed = spawnSync(process.execPath, ['scripts/indexes.js'], options);
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /Index creation failed/);
+  assert.ok(!failed.stderr.includes(first.email));
+  assert.equal(await User.countDocuments({}), 2);
+  await User.deleteOne({ _id: second._id });
+  for (let i = 0; i < 2; i++) {
+    const created = spawnSync(process.execPath, ['scripts/indexes.js'], options);
+    assert.equal(created.status, 0, created.stderr);
+    assert.match(created.stdout, /no indexes dropped/);
+    for (const [model, expected] of definitions) {
+      const indexes = await model.listIndexes();
+      const byKey = (left, right) => JSON.stringify(left[0]).localeCompare(JSON.stringify(right[0]));
+      assert.deepEqual(indexes.map(({ key, unique }) => [key, unique === true]).sort(byKey), [[{ _id: 1 }, false], ...expected].sort(byKey));
+    }
+  }
+  await assert.rejects(User.create({ ...userInput, email: first.email }), { code: 11000 });
+  console.log('Production index CLI: duplicate data fails without deletion; repair and repeated creation leave exactly four custom indexes.');
 });
 
 test('real MongoDB indexes, uniqueness, safe selection and stored references', {

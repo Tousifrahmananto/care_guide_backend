@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { app } from './app.js';
 import { loadEnv } from './config/env.js';
 import { connectDatabase } from './config/database.js';
-import { syncDevelopmentIndexes } from './config/indexes.js';
+import { createApplicationIndexes, syncDevelopmentIndexes } from './config/indexes.js';
 
 let server;
 let stopping = false;
@@ -31,9 +31,11 @@ async function shutdown(exitCode = 0) {
 try {
   const env = loadEnv();
   app.locals.config = env;
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
   await connectDatabase(env.MONGODB_URI);
   console.log('Connected to MongoDB replica set');
-  await syncDevelopmentIndexes(env.NODE_ENV);
+  if (env.NODE_ENV === 'development') await syncDevelopmentIndexes(env.NODE_ENV);
+  else await createApplicationIndexes();
   server = app.listen(env.PORT);
   server.once('listening', () => console.log(`API listening on port ${env.PORT}`));
   server.once('error', () => {
