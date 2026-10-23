@@ -17,7 +17,7 @@ export function summarizePlan(plan) {
     if (!value || typeof value !== 'object') return;
     if (value.stage) stages.add(value.stage);
     if (value.indexName) indexes.add(value.indexName);
-    if (value.$sort) stages.add('$sort');
+    if (value.$sort && value.executionTimeMillisEstimate !== undefined) stages.add('$sort');
     if (value.$lookup && Array.isArray(value.indexesUsed)) {
       lookups.push({ from: value.$lookup.from, indexesUsed: value.indexesUsed, collectionScans: value.collectionScans, totalDocsExamined: value.totalDocsExamined, totalKeysExamined: value.totalKeysExamined });
     }

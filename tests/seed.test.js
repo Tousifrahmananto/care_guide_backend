@@ -28,6 +28,7 @@ test('seed configuration requires an explicit development target and valid Admin
 test('explain summaries ignore rejected plans and echoed command pipelines', () => {
   const plan = { queryPlanner: { winningPlan: { stage: 'IXSCAN', indexName: 'email_1' }, rejectedPlans: [{ stage: 'COLLSCAN' }] }, executionStats: { nReturned: 1, totalDocsExamined: 1, totalKeysExamined: 1 }, command: { pipeline: [{ $lookup: { from: 'ignored' } }] } };
   assert.deepEqual(summarizePlan(plan), { stages: ['IXSCAN'], indexes: ['email_1'], nReturned: 1, totalDocsExamined: 1, totalKeysExamined: 1, lookups: [] });
+  assert.equal(summarizePlan({ stages: [{ $lookup: { from: 'posts', pipeline: [{ $sort: { _id: -1 } }] } }] }).stages.includes('$sort'), false);
 });
 
 test('real additive seed, transaction rollback, preserved edits and representative explain evidence', {
