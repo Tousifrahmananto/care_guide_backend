@@ -88,11 +88,11 @@ test('real MongoDB indexes, uniqueness, safe selection and stored references', {
   skip: !process.env.TEST_MONGODB_URI,
   timeout: 30000,
 }, async (t) => {
-  const uri = process.env.TEST_MONGODB_URI;
-  if (new URL(uri).pathname !== '/secure_notes_models_test') {
-    throw new Error('Model integration tests require the dedicated secure_notes_models_test database');
+  const uri = new URL(process.env.TEST_MONGODB_URI);
+  if (uri.hostname !== '127.0.0.1' || uri.pathname !== '/secure_notes_models_test') {
+    throw new Error('Model integration tests require the dedicated local secure_notes_models_test database');
   }
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000, bufferCommands: false });
+  await mongoose.connect(uri.href, { serverSelectionTimeoutMS: 5000, bufferCommands: false });
   const userIds = [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()];
   t.after(async () => {
     try {

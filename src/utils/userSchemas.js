@@ -4,8 +4,8 @@ import { z } from 'zod';
 const name = z.string().trim().min(1).refine((value) => value.length <= 100);
 const email = z.string().trim().toLowerCase().pipe(z.email());
 const password = z.string().min(8).refine((value) => Buffer.byteLength(value, 'utf8') <= 72);
-const interests = z.array(z.string()).refine((values) =>
-  new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean)).size <= 20);
+export const interestSchema = z.string().trim().toLowerCase().refine((value) => value.length <= 100);
+const interests = z.array(interestSchema).refine((values) => new Set(values.filter(Boolean)).size <= 20);
 
 export const registerSchema = z.object({ name, email, password, interests: interests.default([]) });
 export const loginSchema = z.object({ email, password });

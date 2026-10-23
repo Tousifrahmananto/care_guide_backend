@@ -15,8 +15,8 @@ const userSchema = new mongoose.Schema({
       return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
     },
     validate: {
-      validator: (values) => values.length <= 20,
-      message: 'At most 20 normalized interests are allowed',
+      validator: (values) => values.length <= 20 && values.every((value) => value.length <= 100),
+      message: 'At most 20 normalized interests, each at most 100 UTF-16 units, are allowed',
     },
   },
 }, { timestamps: true, autoCreate: false, autoIndex: false });
