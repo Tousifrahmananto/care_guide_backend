@@ -1,0 +1,19 @@
+import express from 'express';
+import helmet from 'helmet';
+import { HttpError } from './utils/HttpError.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { authRouter } from './routes/auth.routes.js';
+import { meRouter } from './routes/me.routes.js';
+import { notesRouter } from './routes/notes.routes.js';
+import { adminRouter } from './routes/admin.routes.js';
+
+export const app = express();
+app.set('query parser', 'extended');
+app.use(helmet());
+app.use(express.json({ limit: '100kb' }));
+app.use('/api/auth', authRouter);
+app.use('/api/me', meRouter);
+app.use('/api/notes', notesRouter);
+app.use('/api/admin', adminRouter);
+app.use((_req, _res, next) => next(new HttpError(404, 'Route not found')));
+app.use(errorHandler);
