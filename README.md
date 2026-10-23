@@ -193,10 +193,25 @@ Without `TEST_MONGODB_URI`, database suites are explicitly skipped. A green part
 
 The `/tests` ignore rule applies to new, untracked test files. Previously committed tests remain versioned. Additional local regressions, including the CORS test, may be absent from a fresh clone; a local suite count should not be assumed to match the committed suite.
 
-## Deployment status
+## Hosting and deployment
 
-Live URLs are pending. Deploy the backend and frontend independently; the two repository names need not match the package name. Keep all database/JWT/Admin secrets server-side. Set the frontend's `config.js` to the actual public HTTPS API URL ending in `/api`, and set this backend's `FRONTEND_ORIGIN` to the actual frontend origin. The frontend refuses a local/insecure API target when served from a non-local host.
+| Resource | Address |
+| --- | --- |
+| Backend repository | [care_guide_backend](https://github.com/Tousifrahmananto/care_guide_backend) |
+| Frontend repository | [care_guide_frontend](https://github.com/Tousifrahmananto/care_guide_frontend) |
+| Frontend, Vercel | [care-guide-notes.vercel.app](https://care-guide-notes.vercel.app) |
+| Backend API, Render | [Public posts](https://care-guide-notes-api.onrender.com/api/posts), base `https://care-guide-notes-api.onrender.com/api` |
 
-Before publishing, verify proxy hops, HTTPS, the deployed four-index budget, registration/login, ownership, Admin views and public aggregation reads. Publish the frontend and backend repository links alongside their live URLs.
+Both services are publicly available over HTTPS. Hosted integration checks cover authentication, note CRUD and ownership, Admin permissions, public posts, author lookup, interest-member pagination, CORS and browser sessions.
+
+The Render web service `care-guide-notes-api` uses the `main` branch, Singapore region and Free instance. Build with `npm ci --omit=dev` and start with `npm start`. Set `NODE_VERSION=26.12.1`, `NODE_ENV=production`, private `MONGODB_URI` and `JWT_SECRET`, `JWT_EXPIRES_IN=1h`, `BCRYPT_COST=12`, and `FRONTEND_ORIGIN=https://care-guide-notes.vercel.app`. Render supplies `PORT`; the app binds to that port. Store secrets only in Render's environment configuration, never this repository or the frontend.
+
+`TRUST_PROXY_HOPS=3` is configured for the current Render ingress path. Live checks matched the limiter's client identity to the actual outbound client address and preserved that identity with forged single- and multi-address forwarding headers. Recheck this setting after adding a custom domain or another proxy; a different path can require different trust. Incorrect proxy trust can combine rate-limit buckets or accept forged client addresses. The in-memory authentication limiter supports one API instance.
+
+Atlas must permit the service's outbound ranges. Read the current values from Render's **Connect** menu; this service currently lists `74.220.52.0/24` and `74.220.60.0/24`. Preserve existing required Atlas entries. These ranges are shared by Render services, so database credentials and least-privilege database access remain necessary. A successful local connection does not prove the hosted service is allowed to connect.
+
+Production startup awaits the four declared custom indexes using `createIndexes()` before accepting requests. It never runs development index synchronization. Keep MongoDB's replica-set requirement and database permissions in place; do not weaken the connection or index checks to hide a hosting failure.
+
+Render's free instance spins down with inactivity and can delay requests by 50 seconds or more. Verify HTTPS, CORS/preflights, proxy headers, the deployed four-index budget, registration/login, ownership, Admin views and public aggregation reads on the hosted service. `GET /api` still returns 404 by design; use `GET /api/posts` for a public API check. The frontend's `config.js` targets the HTTPS API above.
 
 References: [Mongoose index API](https://mongoosejs.com/docs/api/model.html#Model.createIndexes()), [Express proxy trust](https://expressjs.com/en/guide/behind-proxies.html), [MongoDB development replica sets](https://www.mongodb.com/docs/manual/tutorial/deploy-replica-set-for-testing/), [transaction restrictions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/).
