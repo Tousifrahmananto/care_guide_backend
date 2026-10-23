@@ -5,5 +5,6 @@ const title = z.string().trim().min(1).refine((value) => value.length <= 200);
 const content = z.string().refine((value) => value.length <= 10000);
 
 export const createNoteSchema = z.object({ title, content: content.optional() });
+export const createPostSchema = z.object({ title, content: content.min(1) });
 export const updateNoteSchema = z.object({ title, content }).partial()
   .refine((value) => Object.keys(value).length > 0);
