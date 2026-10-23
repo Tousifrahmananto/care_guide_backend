@@ -21,7 +21,7 @@ export async function listPosts(req, res) {
   const pagination = parsePagination(req.query);
   const [data, total] = await Promise.all([
     Post.find({}).select('_id authorId title content createdAt updatedAt').sort({ _id: -1 }).skip(pagination.skip).limit(pagination.limit).lean(),
-    Post.countDocuments({}),
+    Post.countDocuments({}).hint('_id_'),
   ]);
   res.json(pageResult(data, total, pagination));
 }

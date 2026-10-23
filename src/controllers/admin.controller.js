@@ -24,7 +24,7 @@ export async function listUsers(req, res) {
   const pagination = parsePagination(req.query);
   const [users, total] = await Promise.all([
     User.find().select('-__v').sort({ _id: -1 }).skip(pagination.skip).limit(pagination.limit).lean(),
-    User.countDocuments(),
+    User.countDocuments({}).hint('_id_'),
   ]);
   res.json(pageResult(users.map(userView), total, pagination));
 }

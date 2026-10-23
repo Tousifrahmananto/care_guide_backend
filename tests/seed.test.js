@@ -7,6 +7,9 @@ import { Note } from '../src/models/note.model.js';
 import { Post } from '../src/models/post.model.js';
 import { developmentConfig, seedConfig, seedDatabase, sampleId } from '../scripts/seed.js';
 import { collectExplainEvidence, summarizePlan } from '../scripts/explain.js';
+import { listUsers } from '../src/controllers/admin.controller.js';
+import { listOwnNotes, listAdminNotes } from '../src/controllers/notes.controller.js';
+import { listPosts } from '../src/controllers/posts.controller.js';
 
 const input = {
   NODE_ENV: 'development', MONGODB_URI: 'mongodb://127.0.0.1:27029/secure_notes_dev?replicaSet=notes-dev9',
@@ -106,6 +109,36 @@ test('real additive seed, transaction rollback, preserved edits and representati
     assert.equal((await User.findById(ownerId).lean()).role, 'user');
   });
 
+  await t.test('list totals use existing indexes without forcing owner-filtered counts onto _id_', async () => {
+    const ownerId = sampleId('a', 1);
+    for (const [model, handler, req, total, hint] of [
+      [User, listUsers, { query: {} }, 61, '_id_'],
+      [Post, listPosts, { query: {} }, 300, '_id_'],
+      [Note, listAdminNotes, { query: {} }, 300, '_id_'],
+      [Note, listOwnNotes, { query: {}, user: { _id: ownerId } }, 5, undefined],
+      [Note, listAdminNotes, { query: { ownerId: String(ownerId) } }, 5, undefined],
+    ]) {
+      const collection = model.collection.collection;
+      const original = collection.aggregate;
+      const commands = [];
+      const spy = t.mock.method(collection, 'aggregate', function (pipeline, options) {
+        commands.push({ pipeline, hint: options.hint });
+        return original.call(this, pipeline, options);
+      });
+      let result;
+      try { await handler(req, { json(value) { result = value; } }); }
+      finally { spy.mock.restore(); }
+      assert.equal(result.total, total);
+      assert.equal(commands.length, 1);
+      assert.equal(commands[0].hint, hint);
+      const plan = await collection.aggregate(commands[0].pipeline, { hint }).explain('executionStats');
+      const summary = summarizePlan(plan);
+      assert.equal(summary.totalDocsExamined, 0);
+      assert.ok(summary.indexes.includes(hint ?? 'ownerId_1__id_-1'));
+    }
+    console.log('Actual list count commands: zero documents examined; three _id_ counts and two owner-prefix counts.');
+  });
+
   await t.test('explain covers reads, exact counts, global grouping and actual foreign lookup work', async () => {
     const report = await collectExplainEvidence();
     assert.equal(report.queries.length, 17);
@@ -118,7 +151,7 @@ test('real additive seed, transaction rollback, preserved edits and representati
       assert.ok(query(name).indexes.includes('_id_'), JSON.stringify({ name, summary: query(name) }));
     }
     assert.ok(query('Owner note detail').indexes.some((name) => ['_id_', 'ownerId_1__id_-1'].includes(name)));
-    for (const name of ['Filtered interests and members', 'Filtered rare-interest members', 'Cursor-filtered interest members']) {
+    for (const name of ['Filtered interests and members', 'Filtered additional-interest members', 'Cursor-filtered interest members']) {
       assert.equal(query(name).lookups.length, 1);
       assert.ok(query(name).lookups[0].indexesUsed.length > 0);
       assert.ok(query(name).lookups[0].indexesUsed.every((index) => ['_id_', 'interests_1'].includes(index)));
@@ -126,7 +159,39 @@ test('real additive seed, transaction rollback, preserved edits and representati
     }
     assert.ok(query('Public author posts').lookups[0].indexesUsed.includes('authorId_1__id_-1'));
     assert.ok(query('Global interests').totalDocsExamined > 0);
-    console.log('Representative explain verified: 17 read/count/aggregation plans, 7 total indexes, no hints or new index definitions.');
+    for (const model of [User, Note, Post]) {
+      const summary = query(`${model.collection.name} exact global count`);
+      assert.ok(summary.indexes.includes('_id_'));
+      assert.equal(summary.totalDocsExamined, 0);
+    }
+    console.log('Representative explain verified: 17 plans, 7 total indexes; only global counts hint the existing _id_ index.');
+  });
+
+  await t.test('explain discovers non-seed records and rejects missing prerequisites without writing data', async () => {
+    await Note.deleteMany({ ownerId: { $in: userIds } });
+    await Post.deleteMany({ authorId: { $in: userIds } });
+    await User.deleteMany({ _id: { $in: userIds } });
+    await assert.rejects(collectExplainEvidence(), /existing note/);
+    const ownerId = new mongoose.Types.ObjectId();
+    const memberId = new mongoose.Types.ObjectId();
+    userIds.push(ownerId, memberId);
+    const note = await Note.create({ ownerId, title: 'Existing assessment note' });
+    await assert.rejects(collectExplainEvidence(), /note owner to exist/);
+    await User.create({ _id: ownerId, name: 'Existing owner', email: `owner-${ownerId}@example.com`, passwordHash: 'unused-test-verifier' });
+    await assert.rejects(collectExplainEvidence(), /user with an interest/);
+    await User.create({ _id: memberId, name: 'Existing member', email: `member-${memberId}@example.com`, passwordHash: 'unused-test-verifier', interests: ['reading'] });
+    await Post.create({ authorId: ownerId, title: 'Existing public post', content: 'Assessment content' });
+    const before = await Promise.all([User, Note, Post].map((model) => model.find({}).select('+passwordHash').lean()));
+    const report = await collectExplainEvidence();
+    assert.deepEqual(await Promise.all([User, Note, Post].map((model) => model.find({}).select('+passwordHash').lean())), before);
+    assert.equal(report.queries.length, 17);
+    const command = (name) => report.queries.find((entry) => entry.name === name).plan.command;
+    assert.equal(String(command('Owner note detail').filter._id), note.id);
+    for (const name of ['Filtered interests and members', 'Filtered additional-interest members', 'Cursor-filtered interest members']) {
+      assert.equal(command(name).pipeline[0].$match.interests, 'reading');
+    }
+    const cursor = command('Cursor-filtered interest members').pipeline.find((stage) => stage.$facet).$facet.data.find((stage) => stage.$lookup).$lookup.pipeline[0].$match._id.$lt;
+    assert.equal(String(cursor), String(memberId));
   });
   for (const model of [User, Note, Post]) assert.deepEqual(await model.diffIndexes(), { toDrop: [], toCreate: [] });
 });

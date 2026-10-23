@@ -77,6 +77,8 @@ npm run explain
 
 Both commands deliberately require `NODE_ENV=development` and database name `secure_notes_dev`. Use them only on a dedicated assessment development database. The seed creates an Admin, 60 sample users, 300 notes and 300 posts; it preserves existing credentials and edits on rerun and refuses to promote an existing ordinary account. There are no default Admin credentials. For this assessment's hosted database, prepare that dedicated database before switching the app to production; do not run development synchronization on a shared/live database.
 
+The explain command is read-only and also works with an existing assessment dataset: it selects a saved note, its owner and a user with interests instead of requiring seed IDs. It requires the declared indexes, an existing note with its owner and at least one nonempty interest. Its filtered examples use that member's first two interests (the first is reused when there is only one), and its cursor example uses the same member's actual ID. These examples show the available data; they do not promise a rare-interest distribution. Do not rerun the seed just to inspect existing data.
+
 ## Configuration
 
 | Variable | Meaning |
@@ -105,6 +107,8 @@ All definitions are `Schema.index()` calls in `src/models/`, with query-purpose 
 
 Each collection already has an automatic `_id_` index. It supports profile/detail reads and unfiltered ID-ordered lists. Compound prefixes cover owner/author-only filters, so adding separate ownerId/authorId indexes would be redundant. There are no role, timestamp, title or content indexes.
 
+Unfiltered user, note and post list totals use `countDocuments({}).hint('_id_')` to count existing index keys without fetching every document. Owner-filtered note counts retain the owner-prefix access path. Counts remain exact and O(N) in matching index entries; the hint creates no index and does not turn counting into constant-time work.
+
 `npm run indexes` awaits `createIndexes()` in every environment and never reconciles/drops existing indexes. Production/test startup also awaits that same helper before listening. Existing matching indexes are retained, not rebuilt on every start. Duplicate existing emails, conflicting definitions or missing permissions cause failure; inspect and resolve the data/configuration deliberately rather than deleting records automatically.
 
 Only development startup uses `syncIndexes()`, guarded by the actual database name `secure_notes_dev`. It can drop indexes not declared in the schemas. Do not use that development path on shared data. Production permits other database names and does not call `syncIndexes()`.
@@ -121,8 +125,9 @@ Only development startup uses `syncIndexes()`, guarded by the actual database na
 | Unfiltered first user/note/post page | `_id_` | 20 / 20 |
 | Author posts, foreign lookup | `authorId_1__id_-1` | 5 / 5; zero foreign collection scans |
 | Owner-note count | compound owner prefix | 0 / 5 |
+| Exact global user/note/post counts | `_id_` hint | 0 documents; all matching index keys scanned |
 
-These are representative measurements, not production latency guarantees. Global interest grouping must process all memberships; its input scan and grouped-name sort are expected. Exact global counts also scan the input. Member lookup plans vary with cardinality and may use `_id_` to walk descending IDs while filtering interest. These observations do not justify a speculative fifth index. Large offsets and exact totals should be measured again if the workload grows.
+These are representative measurements, not production latency guarantees. Global interest grouping must process all memberships; its input scan and grouped-name sort are expected. Exact global counts scan index keys using the existing `_id_` hint. Member lookup plans vary with cardinality and may use `_id_` to walk descending IDs while filtering interest. These observations do not justify a speculative fifth index. Large offsets and exact totals should be measured again if the workload grows.
 
 ## Routes and behavior
 

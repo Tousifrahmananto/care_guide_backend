@@ -20,9 +20,11 @@ export async function createNote(req, res) {
 
 async function sendNotes(res, query, filter) {
   const pagination = parsePagination(query);
+  const count = Note.countDocuments(filter);
+  if (filter.ownerId === undefined) count.hint('_id_');
   const [data, total] = await Promise.all([
     Note.find(filter).select('-__v').sort({ _id: -1 }).skip(pagination.skip).limit(pagination.limit).lean(),
-    Note.countDocuments(filter),
+    count,
   ]);
   res.json(pageResult(data, total, pagination));
 }
