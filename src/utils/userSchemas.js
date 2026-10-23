@@ -11,3 +11,8 @@ export const registerSchema = z.object({ name, email, password, interests: inter
 export const loginSchema = z.object({ email, password });
 export const profileSchema = z.object({ name, interests }).partial()
   .refine((value) => Object.keys(value).length > 0);
+
+const role = z.enum(['user', 'admin']);
+export const adminCreateSchema = registerSchema.extend({ role: role.default('user') });
+export const adminUpdateSchema = z.object({ name, email, password, interests, role }).partial()
+  .refine((value) => Object.keys(value).length > 0);

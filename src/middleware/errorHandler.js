@@ -8,6 +8,9 @@ export function errorHandler(error, _req, res, next) {
   if (error instanceof HttpError && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) {
     status = error.status;
     if (status < 500) message = error.message;
+  } else if (error?.code === 11000) {
+    status = 409;
+    message = 'Email already registered';
   } else if (error?.type === 'entity.parse.failed') {
     status = 400;
     message = 'Invalid JSON body';

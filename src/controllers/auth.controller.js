@@ -7,13 +7,7 @@ import { userView } from '../utils/userView.js';
 export async function register(req, res) {
   const { name, email, password, interests } = req.body;
   const passwordHash = await bcrypt.hash(password, req.app.locals.config.BCRYPT_COST);
-  let user;
-  try {
-    user = await User.create({ name, email, passwordHash, interests, role: 'user' });
-  } catch (error) {
-    if (error.code === 11000) throw new HttpError(409, 'Email already registered');
-    throw error;
-  }
+  const user = await User.create({ name, email, passwordHash, interests, role: 'user' });
   res.status(201).json({ data: userView(user) });
 }
 
