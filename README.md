@@ -1,32 +1,56 @@
 # Secure Notes API
 
-Backend for the Secure Note-Taking interview assessment: private notes, User/Admin permissions, public posts and two MongoDB aggregation views. The frontend is a separate repository: [care_guide_frontend](https://github.com/Tousifrahmananto/care_guide_frontend).
+REST API for a note-taking application, built with Express, MongoDB and Mongoose. Users manage their own private notes. Admins also manage accounts and read everyone's notes. The aggregation views group users by interest and retrieve one author's public posts.
 
-## Requirements and quick start
+| Resource | Link |
+| --- | --- |
+| Live API | [Public posts](https://care-guide-notes-api.onrender.com/api/posts) |
+| Live frontend | [care-guide-notes.vercel.app](https://care-guide-notes.vercel.app) |
+| Backend repository | [care_guide_backend](https://github.com/Tousifrahmananto/care_guide_backend) |
+| Frontend repository | [care_guide_frontend](https://github.com/Tousifrahmananto/care_guide_frontend) |
 
-- **Node 26.12.1**, npm 11.20.0; the declared supported Node range is `>=26.12.1 <27`. Run `node --version` before installing. The project uses Node's environment-file flags and `import.meta.main` in its diagnostic scripts; older runtimes are not promised compatible.
-- **MongoDB 9.0.x or 8.0.x, with a writable replica primary**. Tested: local 9.0.4 and Atlas 8.0.34. Standalone MongoDB is unsupported because account deletion and child creation use multi-document transactions.
-- The local setup below uses Windows PowerShell and native MongoDB. Put the chosen Node and `mongod` executables on PATH.
+The API base is `https://care-guide-notes-api.onrender.com/api`. Open the public posts link above to check the service. `GET /api` returns 404 because the base path has no handler; the backend does not serve the frontend. Render's free instance can take about a minute to wake after inactivity.
 
-For a new local clone, install dependencies and create the private configuration if absent:
+## Requirements
+
+- Node 26.12.1 and npm 11.20.0. The supported Node range is `>=26.12.1 <27`. Check `node --version` before installing dependencies. The scripts use Node's environment-file flags and `import.meta.main`.
+- MongoDB 8.0.x or 9.0.x with a writable replica primary. The application has been tested with Atlas 8.0.34 and local MongoDB 9.0.4. Account deletion and note/post creation use transactions, so a standalone MongoDB server is unsupported.
+- A separate frontend. This repository contains the API only.
+
+## Run locally
+
+The commands below use Windows PowerShell. Run them from the backend directory with Node and `mongod` on PATH.
+
+### Install and configure
 
 ```powershell
 npm ci
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Edit `.env`: retain the local URI below and set a private `JWT_SECRET` of at least 32 characters. Generate one using `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"` and store it only in the ignored file. Never commit real credentials.
+Edit `.env` and set `JWT_SECRET` to a private value of at least 32 characters. Generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Store it in the ignored file and keep real credentials out of Git.
 
-### Start a local replica set
+| Variable | Value or purpose |
+| --- | --- |
+| `NODE_ENV` | `development`, `test` or `production`; defaults to development |
+| `PORT` | HTTP port; defaults to 3000 |
+| `MONGODB_URI` | Connection URI; development startup requires the database name `secure_notes_dev` |
+| `JWT_SECRET` | Private JWT signing secret, at least 32 characters |
+| `JWT_EXPIRES_IN` | Positive integer followed by `s`, `m`, `h` or `d`; defaults to `1h` |
+| `BCRYPT_COST` | Integer from 4 to 31; defaults to 12. Tests use 4 to reduce hashing time. |
+| `FRONTEND_ORIGIN` | Exact frontend origin, such as `http://localhost:5500`, without a path or trailing slash |
+| `TRUST_PROXY_HOPS` | Number of trusted proxy hops; defaults to 0 for direct local access |
 
-In one terminal, from the backend directory:
+### Start MongoDB
+
+Start a local replica set in one terminal:
 
 ```powershell
 New-Item -ItemType Directory -Force ../secure-notes-mongo-data | Out-Null
 mongod --dbpath ../secure-notes-mongo-data --replSet notes-dev9 --bind_ip 127.0.0.1 --port 27029
 ```
 
-Keep that process running. In a second terminal, from the backend directory, initialize it using the installed driver through Mongoose:
+Keep it running. In a second terminal, initialize the replica set through the driver included with Mongoose:
 
 ```powershell
 @'
@@ -51,107 +75,63 @@ try {
 '@ | node --input-type=module
 ```
 
-The initializer tolerates only MongoDB's already-initialized code `23`; it does not reconfigure an existing set. This single-member, loopback-only setup is for development, with no redundancy or database authentication. Use an appropriately secured replica set such as Atlas for hosting. If port 27029 already runs the correct set, reuse it instead of starting another process.
+The initializer accepts MongoDB's already-initialized code `23` and leaves the existing replica configuration in place. Reuse the process if port 27029 already runs the correct set.
 
-The local URI is:
+Use this URI in `.env`:
 
 ```text
 mongodb://127.0.0.1:27029/secure_notes_dev?replicaSet=notes-dev9
 ```
 
-### Create indexes, seed and run
+This single-member setup binds to loopback and has no database authentication or redundancy. It is intended for local development. Use a secured replica set, such as Atlas, for hosting.
+
+### Start the API
 
 ```powershell
 npm run indexes
 npm start
 ```
 
-The API listens on port 3000 by default. `GET /api` is not an implemented endpoint and returns a structured 404; test public access using `GET http://localhost:3000/api/posts`. This backend does not serve the frontend.
+The default address is `http://localhost:3000/api`. Check `GET http://localhost:3000/api/posts` for a public response. Requests for private notes and Admin views require a token.
 
-To create the initial Admin and representative data, put explicit `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` values in an ignored `.env.seed` file. Passwords must contain at least 8 characters and at most 72 UTF-8 bytes. Then run:
+### Create the first Admin and sample data
+
+Set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in an ignored `.env.seed` file. Passwords must contain at least 8 characters and fit within 72 UTF-8 bytes. In another terminal, run:
 
 ```powershell
 npm run seed
 npm run explain
 ```
 
-Both commands deliberately require `NODE_ENV=development` and database name `secure_notes_dev`. Use them only on a dedicated assessment development database. The seed creates an Admin, 60 sample users, 300 notes and 300 posts; it preserves existing credentials and edits on rerun and refuses to promote an existing ordinary account. There are no default Admin credentials. For this assessment's hosted database, prepare that dedicated database before switching the app to production; do not run development synchronization on a shared/live database.
+The seed creates an Admin, 60 sample users, 300 notes and 300 posts. Reruns preserve existing credentials and edits. The script refuses to promote an existing ordinary account to Admin, and there are no default Admin credentials.
 
-The explain command is read-only and also works with an existing assessment dataset: it selects a saved note, its owner and a user with interests instead of requiring seed IDs. It requires the declared indexes, an existing note with its owner and at least one nonempty interest. Its filtered examples use that member's first two interests (the first is reused when there is only one), and its cursor example uses the same member's actual ID. These examples show the available data; they do not promise a rare-interest distribution. Do not rerun the seed just to inspect existing data.
+Both commands require `NODE_ENV=development` and database name `secure_notes_dev`. Use a dedicated development database. Prepare sample data there before switching the hosted application to production; development index synchronization must not run against shared or live data.
 
-## Configuration
+The explain command only reads data. It selects an existing note, its owner and a user with interests, so it also works on a dataset created without the sample seed. It needs those records and the declared indexes to exist. Its filtered examples use the selected member's first two interests, or reuse the first when there is only one. The cursor example uses that member's actual ID. The second interest is a sample of available data, with no assumption about rarity. Reseeding is unnecessary when those records already exist.
 
-| Variable | Meaning |
-| --- | --- |
-| `NODE_ENV` | `development`, `test` or `production`; defaults to development |
-| `PORT` | HTTP port, default 3000 |
-| `MONGODB_URI` | Private connection URI; development startup requires the dedicated name `secure_notes_dev` |
-| `JWT_SECRET` | Private signing secret, at least 32 characters |
-| `JWT_EXPIRES_IN` | Positive integer with `s`, `m`, `h` or `d`; default `1h` |
-| `BCRYPT_COST` | Integer 4–31; default 12; test fixtures use 4 for speed |
-| `FRONTEND_ORIGIN` | Exact frontend origin, such as `http://localhost:5500`; no trailing slash or path |
-| `TRUST_PROXY_HOPS` | Nonnegative integer; default 0 for direct access; set only after verifying the actual proxy path |
+## Permissions and endpoints
 
-For a fixed, enforced one-proxy deployment, use `TRUST_PROXY_HOPS=1`. The proxy must overwrite/append forwarding headers correctly, and the API must not have a shorter publicly reachable path. A wrong hop count can permit forged client addresses or combine all clients into one rate-limit bucket. Do not set unrestricted proxy trust. Authentication allows ten combined login/registration attempts per client IP per 15 minutes. Its in-memory store is for one process; use a shared store before adding instances.
+All routes below are relative to `/api`.
 
-## Index strategy: exactly four custom indexes
-
-All definitions are `Schema.index()` calls in `src/models/`, with query-purpose comments. Model `autoIndex` and `autoCreate` remain disabled.
-
-| Model | Custom index | Exact query served |
-| --- | --- | --- |
-| User | `{ email: 1 }`, unique | Normalized login lookup and database-enforced email uniqueness |
-| User | `{ interests: 1 }`, multikey | Interest membership filtering and equality member lookups |
-| Note | `{ ownerId: 1, _id: -1 }` | Own/Admin owner-filtered notes in descending ID order; owner-prefix counts and cascade cleanup |
-| Post | `{ authorId: 1, _id: -1 }` | Author-post lookup in descending ID order; author-prefix cleanup |
-
-Each collection already has an automatic `_id_` index. It supports profile/detail reads and unfiltered ID-ordered lists. Compound prefixes cover owner/author-only filters, so adding separate ownerId/authorId indexes would be redundant. There are no role, timestamp, title or content indexes.
-
-Unfiltered user, note and post list totals use `countDocuments({}).hint('_id_')` to count existing index keys without fetching every document. Owner-filtered note counts retain the owner-prefix access path. Counts remain exact and O(N) in matching index entries; the hint creates no index and does not turn counting into constant-time work.
-
-`npm run indexes` awaits `createIndexes()` in every environment and never reconciles/drops existing indexes. Production/test startup also awaits that same helper before listening. Existing matching indexes are retained, not rebuilt on every start. Duplicate existing emails, conflicting definitions or missing permissions cause failure; inspect and resolve the data/configuration deliberately rather than deleting records automatically.
-
-Only development startup uses `syncIndexes()`, guarded by the actual database name `secure_notes_dev`. It can drop indexes not declared in the schemas. Do not use that development path on shared data. Production permits other database names and does not call `syncIndexes()`.
-
-### Measured explain evidence
-
-`npm run explain` runs the same pipeline builders as the API and reports real execution statistics, index lists and raw plans for 17 read/count/aggregation cases. Example local 9.0.4 evidence on 61 users, 300 notes and 300 posts:
-
-| Query | Executed index | Documents / keys examined |
-| --- | --- | --- |
-| Normalized email | `email_1` | 1 / 1 |
-| User detail | `_id_` | 1 / 1 |
-| Own/owner-filtered notes | `ownerId_1__id_-1` | 5 / 5 |
-| Unfiltered first user/note/post page | `_id_` | 20 / 20 |
-| Author posts, foreign lookup | `authorId_1__id_-1` | 5 / 5; zero foreign collection scans |
-| Owner-note count | compound owner prefix | 0 / 5 |
-| Exact global user/note/post counts | `_id_` hint | 0 documents; all matching index keys scanned |
-
-These are representative measurements, not production latency guarantees. Global interest grouping must process all memberships; its input scan and grouped-name sort are expected. Exact global counts scan index keys using the existing `_id_` hint. Member lookup plans vary with cardinality and may use `_id_` to walk descending IDs while filtering interest. These observations do not justify a speculative fifth index. Large offsets and exact totals should be measured again if the workload grows.
-
-## Routes and behavior
-
-Base path `/api`. Responses use `{ data }`, paginated `{ data, page, limit, total, totalPages }`, or `{ error: { message } }`; login returns `{ token }` and successful deletion returns 204.
-
-| Routes | Access |
+| Routes | Access and behavior |
 | --- | --- |
 | `POST /auth/register`, `POST /auth/login` | Public; registration always creates role `user` |
-| `GET /me`, `PATCH /me` | Signed in; profile updates only name/interests |
-| `POST /notes`, `GET /notes` | Signed in; own notes |
-| `GET /notes/:id` | Owner or Admin |
-| `PATCH /notes/:id`, `DELETE /notes/:id` | Owner only |
-| `GET /admin/notes` | Admin; optional `ownerId` filter |
-| `POST /admin/users`, `GET /admin/users` | Admin |
-| `GET /admin/users/:id`, `PATCH /admin/users/:id`, `DELETE /admin/users/:id` | Admin; self-delete/demotion prohibited |
-| `GET /admin/users/by-interest` | Admin; one view aggregation |
-| `POST /posts` | Signed in; author derived from current user |
-| `GET /posts`, `GET /posts/by-user/:userId` | Public; author view uses one pipeline and exactly one lookup |
+| `GET /me`, `PATCH /me` | Signed in; profile updates accept only name and interests |
+| `POST /notes`, `GET /notes` | Signed in; create or list own notes |
+| `GET /notes/:id` | Note owner or Admin |
+| `PATCH /notes/:id`, `DELETE /notes/:id` | Note owner only, including when the requester is an Admin |
+| `GET /admin/notes` | Admin; all notes or an optional `ownerId` filter |
+| `POST /admin/users`, `GET /admin/users` | Admin; create or list accounts |
+| `GET /admin/users/:id`, `PATCH /admin/users/:id`, `DELETE /admin/users/:id` | Admin; self-deletion and self-demotion are prohibited |
+| `GET /admin/users/by-interest` | Admin; grouped interest view in one aggregation |
+| `POST /posts` | Signed in; author comes from the current account |
+| `GET /posts`, `GET /posts/by-user/:userId` | Public; the author view uses one pipeline with one lookup |
 
-Every list defaults to 20 and caps the requested limit at 100. Invalid/repeated/nested pagination inputs return 400. Interest groups have group pagination and independent member cursors (`interest`, `memberLimit`, `afterUserId`); no user is permanently cut off by a member window. Authentication reloads the current user separately from the aggregation view query, so deletion and role changes take effect on subsequent requests.
+Admins can create and manage their own notes through the same routes as other users. They can read another user's notes, while updates and deletion remain limited to the owner. Ownership is part of each private-note query, and role checks run in middleware.
 
-### Making authenticated requests
+### Requests and responses
 
-After registering an account or creating the initial Admin, log in and attach the token to protected requests. Replace the example credentials with your account's values:
+Log in and attach the returned token to protected requests. Replace the example credentials with your own account:
 
 ```powershell
 $api = 'http://localhost:3000/api'
@@ -164,59 +144,111 @@ Invoke-RestMethod -Method Post -Uri "$api/notes" -Headers $auth -ContentType 'ap
 Invoke-RestMethod -Uri "$api/notes?page=1&limit=20" -Headers $auth
 ```
 
-Account inputs normalize email and interests by trimming/lowercasing, remove blank/duplicate interests and accept at most 20 interests of 100 UTF-16 units each. Passwords are not trimmed or normalized. Note/post titles have a 200-unit maximum and content a 10,000-unit maximum; a note may have empty content, while a post requires content. JSON bodies are limited to 100kb.
+Single-resource responses use `{ data }`. Lists use `{ data, page, limit, total, totalPages }`; errors use `{ error: { message } }`. Login returns `{ token }`, and successful deletion returns 204 without a body.
 
-### Aggregation views
+Every list defaults to 20 items and caps the requested limit at 100. Invalid, repeated or nested pagination inputs return 400. Interest groups have a separate member limit and cursor through `interest`, `memberLimit` and `afterUserId`, so members beyond the first page remain reachable.
 
-`GET /api/admin/users/by-interest?page=1&limit=20&memberLimit=20` pages interest groups. Each group contains `interest`, `count`, safe `users`, `hasMoreUsers` and `nextUserCursor`. To continue one group's members, send its interest and cursor as `interest=chess&afterUserId=<nextUserCursor>&memberLimit=20`; encode interest values when constructing URLs. The cursor changes the member page, not the total membership count. The view performs exactly one aggregation call and no additional view query methods.
-
-`GET /api/posts/by-user/<userId>?page=1&limit=20` returns public posts and a safe author object using one aggregation pipeline with one `$lookup`. An existing author with no posts returns an empty page; an unknown author returns 404. Public output excludes email, hashes, internal version counters and private notes.
+Email and interests are trimmed and lowercased. Blank and duplicate interests are removed, with at most 20 interests of 100 UTF-16 units each. Passwords retain their original whitespace and case. Note/post titles allow up to 200 units and content up to 10,000 units. Notes may have empty content; posts require content. JSON bodies are limited to 100kb.
 
 | Status | Meaning |
 | --- | --- |
-| `400` | Malformed JSON, invalid fields, ID, cursor or pagination |
+| `400` | Malformed JSON or invalid fields, ID, cursor or pagination |
 | `401` | Missing, invalid or expired authentication, including a deleted account |
-| `403` | Current role cannot perform the operation, or the supplied Origin is not allowed |
-| `404` | Missing resource; another user's private note also returns 404 |
+| `403` | Current role lacks access, or the supplied Origin is not allowed |
+| `404` | Missing resource; another user's private note also returns this status |
 | `409` | Duplicate email or prohibited self-deletion/demotion |
 | `413` | Request body exceeds the JSON size limit |
 | `429` | Authentication attempt limit reached |
-| `500` | Unexpected server failure; internal details are not returned |
+| `500` | Unexpected server failure; internal details stay out of the response |
 
-Deleting a user removes that user's notes/posts atomically. Child creation and deletion write the same User inside transactions so a concurrent create cannot leave an orphan. Admin mutations coordinate current actor and target in consistent ID order, preventing stale authorization and conflicting actions from leaving no Admin. Password hashes never appear in API responses; unexpected server errors keep generic public messages and log only method, static route, status and error category/code.
+### Authentication and account deletion
 
-## Verify
+Passwords are hashed with bcrypt. Password hashes never appear in API responses. Authentication reloads the current account, so deletion and role changes take effect on subsequent requests. The authentication lookup is separate from the aggregation used to build a view.
 
-Run the full suite against the dedicated **local** test database, never Atlas:
+Deleting an account removes its notes and posts in the same transaction. Child creation and deletion both write the parent User document, so a concurrent create cannot leave an orphan. Admin changes coordinate the acting account and target in consistent ID order. This prevents stale authorization and opposing Admin actions from removing every Admin.
+
+Unexpected errors return a generic public message. Server diagnostics record the method, static route, status and error category/code without logging raw request bodies, tokens or connection strings.
+
+## Aggregation views
+
+### Users grouped by interest
+
+`GET /api/admin/users/by-interest?page=1&limit=20&memberLimit=20` returns paginated groups. Each group contains `interest`, `count`, safe `users`, `hasMoreUsers` and `nextUserCursor`.
+
+Continue one group's members with `interest=chess&afterUserId=<nextUserCursor>&memberLimit=20`. Encode interest values when constructing the URL. The cursor changes the member page and leaves the full membership count intact. Group totals and member pages are built in exactly one aggregation call, with no additional view query methods.
+
+### Posts by one user
+
+`GET /api/posts/by-user/<userId>?page=1&limit=20` returns public posts and a safe author object through one pipeline with one `$lookup`. An existing author without posts returns an empty page. An unknown author returns 404. The response excludes email, password hashes, internal version counters and private notes.
+
+## Index strategy
+
+The models declare exactly four custom indexes using `Schema.index()` in `src/models/`. Each declaration has a comment naming the query it supports. Model `autoIndex` and `autoCreate` are disabled.
+
+| Model | Custom index | Query served |
+| --- | --- | --- |
+| User | `{ email: 1 }`, unique | Normalized login and database-enforced email uniqueness |
+| User | `{ interests: 1 }`, multikey | Interest filtering and equality lookups for group members |
+| Note | `{ ownerId: 1, _id: -1 }` | Own/Admin owner-filtered notes in descending ID order; owner-prefix counts and cascade cleanup |
+| Post | `{ authorId: 1, _id: -1 }` | Author-post lookup in descending ID order; author-prefix cleanup |
+
+The automatic `_id_` indexes cover profile/detail reads and unfiltered lists ordered by ID. The owner and author compound prefixes also cover filters on those fields alone. Separate ownerId/authorId indexes would duplicate that coverage. The models have no role, timestamp, title or content indexes.
+
+Unfiltered user, note and post totals use `countDocuments({}).hint('_id_')` to count keys without fetching every document. Owner-filtered note totals use the existing compound prefix. Exact totals remain O(N) in matching index entries.
+
+### Creating indexes
+
+`npm run indexes` awaits `createIndexes()` in every environment. Production and test startup use the same helper before accepting requests. It retains matching indexes and never reconciles or drops existing indexes. Duplicate emails, conflicting definitions or missing permissions cause startup to fail so the underlying data or configuration can be corrected.
+
+Development startup uses `syncIndexes()` only when the actual database name is `secure_notes_dev`. It can drop indexes absent from the schemas and must remain confined to that dedicated database. Production accepts other database names and does not use this synchronization path.
+
+### Reading explain output
+
+`npm run explain` uses the same aggregation builders as the API. It reports execution statistics, index lists and raw plans for 17 read/count/aggregation cases. Representative local MongoDB 9.0.4 measurements on 61 users, 300 notes and 300 posts:
+
+| Query | Executed index | Documents / keys examined |
+| --- | --- | --- |
+| Normalized email | `email_1` | 1 / 1 |
+| User detail | `_id_` | 1 / 1 |
+| Own/owner-filtered notes | `ownerId_1__id_-1` | 5 / 5 |
+| Unfiltered first user/note/post page | `_id_` | 20 / 20 |
+| Author posts, foreign lookup | `authorId_1__id_-1` | 5 / 5; zero foreign collection scans |
+| Owner-note count | compound owner prefix | 0 / 5 |
+| Exact global user/note/post counts | `_id_` hint | 0 documents; all matching index keys scanned |
+
+These figures describe database work on that dataset. They are not latency guarantees. Global interest grouping must process all memberships and sort the resulting group names. Member lookup plans depend on data distribution and may walk `_id_` in descending order while filtering interest. Exact totals and deep offset pages still grow more expensive with more data; those costs need measurement before changing the index plan.
+
+## Tests
+
+Run database tests against the dedicated local replica, never Atlas:
 
 ```powershell
 $env:TEST_MONGODB_URI='mongodb://127.0.0.1:27029/secure_notes_models_test?replicaSet=notes-dev9'
 npm test
 ```
 
-Without `TEST_MONGODB_URI`, database suites are explicitly skipped. A green partial run does not verify transactions, actual indexes or aggregation plans. Integration tests reject a non-loopback/wrong base database URI; temporary production-startup/index test databases are uniquely named and guarded before cleanup.
+Without `TEST_MONGODB_URI`, database suites are skipped. Such a run does not verify transactions, stored indexes or aggregation plans. Integration tests check the loopback host and expected base database name before connecting. Temporary databases used for production-startup/index checks have unique names and guarded cleanup.
 
-The `/tests` ignore rule applies to new, untracked test files. Previously committed tests remain versioned. Additional local regressions, including the CORS test, may be absent from a fresh clone; a local suite count should not be assumed to match the committed suite.
+The `/tests` ignore rule applies to new, untracked files. Previously committed tests remain versioned. Local-only regressions, including the CORS test, may be absent from a fresh clone, so test counts can differ between the local checkout and the repository.
 
-## Hosting and deployment
+## Deployment
 
-| Resource | Address |
-| --- | --- |
-| Backend repository | [care_guide_backend](https://github.com/Tousifrahmananto/care_guide_backend) |
-| Frontend repository | [care_guide_frontend](https://github.com/Tousifrahmananto/care_guide_frontend) |
-| Frontend, Vercel | [care-guide-notes.vercel.app](https://care-guide-notes.vercel.app) |
-| Backend API, Render | [Public posts](https://care-guide-notes-api.onrender.com/api/posts), base `https://care-guide-notes-api.onrender.com/api` |
+The frontend runs on Vercel and this API runs on Render over HTTPS. The Render service `care-guide-notes-api` deploys from `main` in Singapore on a Free instance. Its build command is `npm ci --omit=dev` and start command is `npm start`.
 
-Both services are publicly available over HTTPS. Hosted integration checks cover authentication, note CRUD and ownership, Admin permissions, public posts, author lookup, interest-member pagination, CORS and browser sessions.
+Set `NODE_VERSION=26.12.1`, `NODE_ENV=production`, private `MONGODB_URI` and `JWT_SECRET`, `JWT_EXPIRES_IN=1h`, `BCRYPT_COST=12` and `FRONTEND_ORIGIN=https://care-guide-notes.vercel.app`. Render supplies `PORT`. Keep secrets in the backend environment configuration; frontend files are public.
 
-The Render web service `care-guide-notes-api` uses the `main` branch, Singapore region and Free instance. Build with `npm ci --omit=dev` and start with `npm start`. Set `NODE_VERSION=26.12.1`, `NODE_ENV=production`, private `MONGODB_URI` and `JWT_SECRET`, `JWT_EXPIRES_IN=1h`, `BCRYPT_COST=12`, and `FRONTEND_ORIGIN=https://care-guide-notes.vercel.app`. Render supplies `PORT`; the app binds to that port. Store secrets only in Render's environment configuration, never this repository or the frontend.
+### Proxy trust and rate limits
 
-`TRUST_PROXY_HOPS=3` is configured for the current Render ingress path. Live checks matched the limiter's client identity to the actual outbound client address and preserved that identity with forged single- and multi-address forwarding headers. Recheck this setting after adding a custom domain or another proxy; a different path can require different trust. Incorrect proxy trust can combine rate-limit buckets or accept forged client addresses. The in-memory authentication limiter supports one API instance.
+Use `TRUST_PROXY_HOPS=0` for direct local access. A fixed, enforced one-proxy deployment can use `TRUST_PROXY_HOPS=1` if the proxy handles forwarding headers correctly and there is no shorter public path to the API. The current Render ingress uses `TRUST_PROXY_HOPS=3`, verified against the actual client address with single- and multi-address forged forwarding headers. Check it again after adding a domain or another proxy.
 
-Atlas must permit the service's outbound ranges. Read the current values from Render's **Connect** menu; this service currently lists `74.220.52.0/24` and `74.220.60.0/24`. Preserve existing required Atlas entries. These ranges are shared by Render services, so database credentials and least-privilege database access remain necessary. A successful local connection does not prove the hosted service is allowed to connect.
+Unrestricted or incorrect proxy trust can accept forged addresses or combine clients into one rate-limit bucket. Authentication allows ten combined login/registration attempts per client IP per 15 minutes. The in-memory limiter supports one process; use a shared store before adding instances.
 
-Production startup awaits the four declared custom indexes using `createIndexes()` before accepting requests. It never runs development index synchronization. Keep MongoDB's replica-set requirement and database permissions in place; do not weaken the connection or index checks to hide a hosting failure.
+### Database access and hosting checks
 
-Render's free instance spins down with inactivity and can delay requests by 50 seconds or more. Verify HTTPS, CORS/preflights, proxy headers, the deployed four-index budget, registration/login, ownership, Admin views and public aggregation reads on the hosted service. `GET /api` still returns 404 by design; use `GET /api/posts` for a public API check. The frontend's `config.js` targets the HTTPS API above.
+Atlas must allow the backend's outbound ranges. Read them from Render's Connect menu; the current service lists `74.220.52.0/24` and `74.220.60.0/24`. Preserve other required Atlas entries. These ranges are shared, so database credentials and least-privilege access still matter. Check connectivity from the hosted service as well as the local machine.
+
+Production startup waits for the four declared custom indexes through `createIndexes()` before accepting requests. Keep the replica-set requirement and database permissions in place when diagnosing a hosting failure.
+
+After a deployment or configuration change, check HTTPS, CORS/preflights, proxy headers, the four-index inventory, registration/login, note CRUD and ownership, Admin views, public posts, aggregation views and browser sessions. The frontend's `config.js` points to the HTTPS API base listed above. A slow first request after inactivity can be Render waking its free instance; requests may take 50 seconds or more during that wake-up.
 
 References: [Mongoose index API](https://mongoosejs.com/docs/api/model.html#Model.createIndexes()), [Express proxy trust](https://expressjs.com/en/guide/behind-proxies.html), [MongoDB development replica sets](https://www.mongodb.com/docs/manual/tutorial/deploy-replica-set-for-testing/), [transaction restrictions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/).
